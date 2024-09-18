@@ -1,0 +1,27 @@
+/* Sweep
+ by BARRAGAN <http://barraganstudio.com>
+ This example code is in the public domain.
+
+ modified 8 Nov 2013
+ by Scott Fitzgerald
+ https://www.arduino.cc/en/Tutorial/LibraryExamples/Sweep
+*/
+
+#include <Servo.h>
+
+Servo servo1;  // create servo object to control a servo
+// twelve servo objects can be created on most boards
+
+void setup() {
+
+  servo1.attach(9);
+  Serial.begin(115200);
+}
+
+void loop(){
+  while (Serial.available() == 0) {
+    String data = Serial.readString();
+    servo1.write(data.toInt());
+    Serial.println(data);
+  }
+}
