@@ -167,8 +167,10 @@ def main():
             ax3.set_xlim([-500, 500])
             ax3.set_ylim([-500, 500])
             ax3.set_zlim([-500, 500])
+        
         plt.pause(0.001)
-        if cv.waitKey(1) & 0xFF == ord('q'):
+        # Break out of the loop if the matplotlib window is closed.
+        if not plt.get_fignums():
             break
 
     # Stop the Picamera2 objects.
