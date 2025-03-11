@@ -1,7 +1,7 @@
 import cv2
 
-cap = cv2.VideoCapture(0)
-cap2 = cv2.VideoCapture(1,cv2.CAP_DSHOW)
+cap = cv2.VideoCapture(1,cv2.CAP_DSHOW)
+cap2 = cv2.VideoCapture(0)
 
 num = 0
 
