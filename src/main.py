@@ -1,231 +1,170 @@
-import numpy as np
+#!/usr/bin/env python3
 import cv2 as cv
+import numpy as np
+import os
 import glob
-from sympy import Plane, Point3D
-import math
-import serial
-from time import sleep
-import dlib  # UPDATED: using dlib for facial landmark detection
+import argparse
+from picamera2 import Picamera2
 
-def generate_calibration_params():
-    ################ FIND CHESSBOARD CORNERS - OBJECT POINTS AND IMAGE POINTS #############################
-    chessboardSize = (8,6)
-    frameSize = (640,480)
+def capture_images(num_images=20, 
+                   save_dir_left='images/stereoLeft', 
+                   save_dir_right='images/stereoRight'):
+    """
+    Capture stereo images using the IMX219-83 with Picamera2.
+    Two independent Picamera2 objects are used (one for each camera).
+    Press 's' to save the current stereo pair, or 'ESC' to exit.
+    """
+    os.makedirs(save_dir_left, exist_ok=True)
+    os.makedirs(save_dir_right, exist_ok=True)
+    
+    # Initialize and configure cameras
+    picamLeft = Picamera2(camera_num=0)
+    picamLeft.configure(picamLeft.create_preview_configuration())
+    picamLeft.start()
+    
+    picamRight = Picamera2(camera_num=1)
+    picamRight.configure(picamRight.create_preview_configuration())
+    picamRight.start()
+    
+    print("Press 's' to save stereo image pair, or 'ESC' to exit.")
+    count = 0
+    while count < num_images:
+        # Capture frames from both cameras
+        frameLeft = picamLeft.capture_array()
+        frameRight = picamRight.capture_array()
+        
+        # Convert from RGB to BGR for OpenCV
+        imgL = cv.cvtColor(frameLeft, cv.COLOR_RGB2BGR)
+        imgR = cv.cvtColor(frameRight, cv.COLOR_RGB2BGR)
+        
+        # Display the images
+        cv.imshow("Left Camera", imgL)
+        cv.imshow("Right Camera", imgR)
+        
+        key = cv.waitKey(1) & 0xFF
+        if key == 27:  # ESC key to exit
+            break
+        elif key == ord('s'):
+            left_filename = os.path.join(save_dir_left, f"imageL{count:02d}.png")
+            right_filename = os.path.join(save_dir_right, f"imageR{count:02d}.png")
+            cv.imwrite(left_filename, imgL)
+            cv.imwrite(right_filename, imgR)
+            print(f"Saved stereo pair {count}")
+            count += 1
 
-    # termination criteria
+    cv.destroyAllWindows()
+    picamLeft.stop()
+    picamRight.stop()
+    print("Image capture complete.")
+
+def stereo_calibration(chessboard_size=(8, 6),
+                       square_size=30,
+                       image_dir_left='images/stereoLeft',
+                       image_dir_right='images/stereoRight',
+                       output_dir='calibration_params',
+                       frame_size=(640, 480)):
+    """
+    Perform stereo calibration using captured chessboard images.
+    Detects chessboard corners in both left and right images, calibrates each
+    camera individually, then runs stereo calibration to compute rotation and
+    translation between the two cameras.
+    Calibration parameters are saved as .npy files.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Termination criteria for subpixel corner refinement
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    
+    # Prepare object points: (0,0,0), (1,0,0), ... scaled by the actual square size (in mm)
+    objp = np.zeros((chessboard_size[0]*chessboard_size[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]].T.reshape(-1, 2)
+    objp = objp * square_size
+    
+    objpoints = []   # 3D points in real-world space
+    imgpointsL = []  # 2D points in left image plane
+    imgpointsR = []  # 2D points in right image plane
 
-    # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-    objp = np.zeros((chessboardSize[0] * chessboardSize[1], 3), np.float32)
-    objp[:,:2] = np.mgrid[0:chessboardSize[0],0:chessboardSize[1]].T.reshape(-1,2)
+    images_left = sorted(glob.glob(os.path.join(image_dir_left, '*.png')))
+    images_right = sorted(glob.glob(os.path.join(image_dir_right, '*.png')))
 
-    size_of_chessboard_squares_mm = 30
-    objp = objp * size_of_chessboard_squares_mm
+    if len(images_left) != len(images_right):
+        print("The number of left and right images do not match!")
+        return
 
-    # Arrays to store object points and image points from all the images.
-    objpoints = []  # 3d point in real world space
-    imgpointsL = []  # 2d points in image plane.
-    imgpointsR = []  # 2d points in image plane.
-
-    imagesLeft = sorted(glob.glob('../calibration/images/stereoLeft/*.png'))
-    imagesRight = sorted(glob.glob('../calibration/images/stereoright/*.png'))
-
-    for imgLeft, imgRight in zip(imagesLeft, imagesRight):
-        imgL = cv.imread(imgLeft)
-        imgR = cv.imread(imgRight)
+    for img_left_path, img_right_path in zip(images_left, images_right):
+        imgL = cv.imread(img_left_path)
+        imgR = cv.imread(img_right_path)
         grayL = cv.cvtColor(imgL, cv.COLOR_BGR2GRAY)
         grayR = cv.cvtColor(imgR, cv.COLOR_BGR2GRAY)
 
-        # Find the chess board corners
-        retL, cornersL = cv.findChessboardCorners(grayL, chessboardSize, None)
-        retR, cornersR = cv.findChessboardCorners(grayR, chessboardSize, None)
+        retL, cornersL = cv.findChessboardCorners(grayL, chessboard_size, None)
+        retR, cornersR = cv.findChessboardCorners(grayR, chessboard_size, None)
 
-        # If found, add object points, image points (after refining them)
-        if retL and retR == True:
+        if retL and retR:
             objpoints.append(objp)
-
-            cornersL = cv.cornerSubPix(grayL, cornersL, (11,11), (-1,-1), criteria)
+            
+            cornersL = cv.cornerSubPix(grayL, cornersL, (11, 11), (-1, -1), criteria)
             imgpointsL.append(cornersL)
-
-            cornersR = cv.cornerSubPix(grayR, cornersR, (11,11), (-1,-1), criteria)
+            
+            cornersR = cv.cornerSubPix(grayR, cornersR, (11, 11), (-1, -1), criteria)
             imgpointsR.append(cornersR)
-
-            # Draw and display the corners
-            cv.drawChessboardCorners(imgL, chessboardSize, cornersL, retL)
-            cv.imshow('img left', imgL)
-            cv.drawChessboardCorners(imgR, chessboardSize, cornersR, retR)
-            cv.imshow('img right', imgR)
-            cv.waitKey(1000)
-
+            
+            # Optionally display detected corners for verification
+            cv.drawChessboardCorners(imgL, chessboard_size, cornersL, retL)
+            cv.drawChessboardCorners(imgR, chessboard_size, cornersR, retR)
+            cv.imshow("Left Chessboard", imgL)
+            cv.imshow("Right Chessboard", imgR)
+            cv.waitKey(500)
     cv.destroyAllWindows()
 
-    ############## CALIBRATION #######################################################
-    retL, cameraMatrixL, distL, rvecsL, tvecsL = cv.calibrateCamera(objpoints, imgpointsL, frameSize, None, None)
-    heightL, widthL, channelsL = imgL.shape
-    newCameraMatrixL, roi_L = cv.getOptimalNewCameraMatrix(cameraMatrixL, distL, (widthL, heightL), 1, (widthL, heightL))
-
-    retR, cameraMatrixR, distR, rvecsR, tvecsR = cv.calibrateCamera(objpoints, imgpointsR, frameSize, None, None)
-    heightR, widthR, channelsR = imgR.shape
-    newCameraMatrixR, roi_R = cv.getOptimalNewCameraMatrix(cameraMatrixR, distR, (widthR, heightR), 1, (widthR, heightR))
-
-    ########## Stereo Vision Calibration #############################################
-    flags = 0
-    flags |= cv.CALIB_FIX_INTRINSIC
-    # Here we fix the intrinsic camera matrices so that only Rot, Trans, Emat and Fmat are calculated.
-    # Hence intrinsic parameters are the same 
-
-    criteria_stereo = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    # This step is performed to determine transformation between the two cameras and calculate Essential and Fundamental matrix
-    retStereo, newCameraMatrixL, distL, newCameraMatrixR, distR, rot, trans, essentialMatrix, fundamentalMatrix = cv.stereoCalibrate(
-        objpoints, imgpointsL, imgpointsR, newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], criteria_stereo, flags)
-
-    ########## Stereo Rectification #################################################
-    rectifyScale = 1
-    rectL, rectR, projMatrixL, projMatrixR, Q, roi_L, roi_R = cv.stereoRectify(
-        newCameraMatrixL, distL, newCameraMatrixR, distR, grayL.shape[::-1], rot, trans, rectifyScale, (0,0))
-
-    with open('../calibration/params/distL.npy', 'wb') as f:
-        np.save(f, distL)
-    with open('../calibration/params/distR.npy', 'wb') as f:
-        np.save(f, distR)
-    with open('../calibration/params/projMatrixL.npy', 'wb') as f:
-        np.save(f, projMatrixL)
-    with open('../calibration/params/projMatrixR.npy', 'wb') as f:
-        np.save(f, projMatrixR)
-    with open('../calibration/params/cameraMatrixL.npy', 'wb') as f:
-        np.save(f, cameraMatrixL)
-    with open('../calibration/params/cameraMatrixR.npy', 'wb') as f:
-        np.save(f, cameraMatrixR)
-
-def undistort_frame(img1, img2):
-    height, width = img1.shape[:2]
-
-    camera_matrix_L = np.load('../calibration/params/cameraMatrixL.npy')
-    camera_matrix_R = np.load('../calibration/params/cameraMatrixR.npy')
-    dist_L = np.load('../calibration/params/distL.npy')
-    dist_R = np.load('../calibration/params/distR.npy')
-    proj_matrix_L = np.load('../calibration/params/projMatrixL.npy')
-    proj_matrix_R = np.load('../calibration/params/projMatrixR.npy')
-
-    # get optimal camera matrix for better undistortion
-    new_camera_matrix_L, roi_L = cv.getOptimalNewCameraMatrix(camera_matrix_L, dist_L, (width, height), 1, (width, height))
-    new_camera_matrix_R, roi_R = cv.getOptimalNewCameraMatrix(camera_matrix_R, dist_R, (width, height), 1, (width, height))
-
-    new_img1 = cv.undistort(img1, camera_matrix_L, dist_L, None, new_camera_matrix_L)
-    new_img2 = cv.undistort(img2, camera_matrix_R, dist_R, None, new_camera_matrix_R)
-
-    roi_L_x, roi_L_y, roi_L_width, roi_L_height = roi_L
-    new_img1 = new_img1[roi_L_y:roi_L_y + roi_L_height, roi_L_x:roi_L_x + roi_L_width]
-
-    roi_R_x, roi_R_y, roi_R_width, roi_R_height = roi_R
-    new_img2 = new_img2[roi_R_y:roi_R_y + roi_R_height, roi_R_x:roi_R_x + roi_R_width]
-
-    return new_img1, new_img2
+    # Calibrate each camera individually
+    retL, cameraMatrixL, distL, rvecsL, tvecsL = cv.calibrateCamera(
+        objpoints, imgpointsL, frame_size, None, None)
+    retR, cameraMatrixR, distR, rvecsR, tvecsR = cv.calibrateCamera(
+        objpoints, imgpointsR, frame_size, None, None)
+    
+    # Stereo calibration: fix the intrinsic parameters and compute the extrinsics
+    flags = cv.CALIB_FIX_INTRINSIC
+    criteria_stereo = (cv.TERM_CRITERIA_MAX_ITER + cv.TERM_CRITERIA_EPS, 30, 1e-6)
+    retStereo, cameraMatrixL, distL, cameraMatrixR, distR, rot, trans, essentialMatrix, fundamentalMatrix = cv.stereoCalibrate(
+        objpoints, imgpointsL, imgpointsR,
+        cameraMatrixL, distL, cameraMatrixR, distR,
+        frame_size, criteria=criteria_stereo, flags=flags)
+    
+    # Stereo Rectification (0 to crop, 1 to keep full images)
+    rectify_scale = 1
+    R1, R2, projMatrixL, projMatrixR, Q, roiL, roiR = cv.stereoRectify(
+        cameraMatrixL, distL, cameraMatrixR, distR,
+        frame_size, rot, trans, flags=cv.CALIB_ZERO_DISPARITY, alpha=rectify_scale)
+    
+    # Save calibration parameters
+    np.save(os.path.join(output_dir, 'cameraMatrixL.npy'), cameraMatrixL)
+    np.save(os.path.join(output_dir, 'cameraMatrixR.npy'), cameraMatrixR)
+    np.save(os.path.join(output_dir, 'distL.npy'), distL)
+    np.save(os.path.join(output_dir, 'distR.npy'), distR)
+    np.save(os.path.join(output_dir, 'projMatrixL.npy'), projMatrixL)
+    np.save(os.path.join(output_dir, 'projMatrixR.npy'), projMatrixR)
+    np.save(os.path.join(output_dir, 'rot.npy'), rot)
+    np.save(os.path.join(output_dir, 'trans.npy'), trans)
+    np.save(os.path.join(output_dir, 'essentialMatrix.npy'), essentialMatrix)
+    np.save(os.path.join(output_dir, 'fundamentalMatrix.npy'), fundamentalMatrix)
+    np.save(os.path.join(output_dir, 'Q.npy'), Q)
+    
+    print("Calibration complete. Parameters saved in folder:", output_dir)
 
 def main():
-    # UPDATED: Load dlib's face detector and shape predictor
-    detector = dlib.get_frontal_face_detector()
-    predictor = dlib.shape_predictor("../shape_predictor_68_face_landmarks.dat")
+    parser = argparse.ArgumentParser(
+        description="Stereo Calibration for the IMX219-83 Stereo Camera using Picamera2")
+    parser.add_argument('--mode', type=str, choices=['capture', 'calibrate'],
+                        required=True, help="Select 'capture' to acquire images or 'calibrate' to process calibration.")
+    parser.add_argument('--num_images', type=int, default=20,
+                        help="(capture mode) Number of stereo image pairs to capture")
+    args = parser.parse_args()
     
-    # (Cascade classifiers remain in the file below but are no longer used)
-    # face_cascade = cv.CascadeClassifier('../CascadeClassifiers/haarcascade_frontalface_alt.xml')
-    # eye_cascade = cv.CascadeClassifier('../CascadeClassifiers/haarcascade_eye_tree_eyeglasses.xml')
-    
-    proj_matrix_L = np.load('../calibration/params/projMatrixL.npy')
-    proj_matrix_R = np.load('../calibration/params/projMatrixR.npy')
+    if args.mode == 'capture':
+        capture_images(num_images=args.num_images)
+    elif args.mode == 'calibrate':
+        stereo_calibration()
 
-    vid_cap_L = cv.VideoCapture(1)
-    vid_cap_R = cv.VideoCapture(0, cv.CAP_DSHOW)
-
-    while True:
-        ret_L, img_L = vid_cap_L.read()
-        ret_R, img_R = vid_cap_R.read()
-        
-        # Undistort the frames
-        undistorted_L, undistorted_R = undistort_frame(img_L, img_R)
-        gray_L = cv.cvtColor(undistorted_L, cv.COLOR_BGR2GRAY)
-        gray_R = cv.cvtColor(undistorted_R, cv.COLOR_BGR2GRAY)
-        
-        # UPDATED: Use dlib to detect faces and extract facial landmarks
-        faces_L = detector(gray_L)
-        faces_R = detector(gray_R)
-        
-        if len(faces_L) > 0 and len(faces_R) > 0:
-            # Use the first detected face in each frame
-            shape_L = predictor(gray_L, faces_L[0])
-            shape_R = predictor(gray_R, faces_R[0])
-            
-            # Get the 28th point from the landmark array (assuming 1-indexed, so index 27 in Python)
-            midpt_L = (shape_L.part(27).x, shape_L.part(27).y)
-            midpt_R = (shape_R.part(27).x, shape_R.part(27).y)
-            
-            # Draw the landmark point on the images for visualization
-            cv.circle(img_L, midpt_L, radius=2, color=(0,255,0), thickness=2)
-            cv.circle(img_R, midpt_R, radius=2, color=(0,255,0), thickness=2)
-            
-            print("midpt_L: ", midpt_L)
-            print("midpt_R: ", midpt_R)
-            
-            # Triangulate the 3D point using the projection matrices
-            threeD_midpt = cv.triangulatePoints(proj_matrix_L, proj_matrix_R, midpt_L, midpt_R)
-            threeD_midpt /= threeD_midpt[3]
-            print("3D midpoint: ", threeD_midpt, "\n")
-            
-            try:
-                # Manually set the rear window point -- NEED TO MANUALLY ADJUST TO MATCH RELATIVE TO MIRROR ITSELF
-                threeD_window_pt = [[ -5e+05],
-                                    [ 8.65304694e+04],
-                                    [-1.1e+04],
-                                    [ 1.00000000e+00]]
-
-                driver_plane = Plane(Point3D(0, 0, 0), 
-                                     Point3D(threeD_midpt[0][0], 0, threeD_midpt[2][0]), 
-                                     Point3D(threeD_midpt[0][0], threeD_midpt[1][0], threeD_midpt[2][0]))
-                rear_window_plane = Plane(Point3D(0, 0, 0), 
-                                          Point3D(threeD_window_pt[0][0], 0, threeD_window_pt[2][0]), 
-                                          Point3D(threeD_window_pt[0][0], threeD_window_pt[1][0], threeD_window_pt[2][0]))
-                print("Line 266\n")
-                xy_plane = Plane(Point3D(0, 0, 0), Point3D(1, 0, 0), Point3D(0, 1, 0))
-                xz_plane = Plane(Point3D(0, 0, 0), Point3D(1, 0, 0), Point3D(0, 0, 1))
-
-                alpha = driver_plane.angle_between(rear_window_plane)
-                beta = driver_plane.angle_between(xy_plane)
-                yaw = math.degrees(alpha/2 + beta)
-                print("Line 273 \n")
-                bisector_pt1 = tuple(driver_plane.intersection(rear_window_plane)[0].points[0])
-                bisector_pt2 = tuple(driver_plane.intersection(rear_window_plane)[0].points[1])
-                bisector_pt3 = (1, 0, math.tan(yaw))
-                print("We get to line 277")
-                bisector_plane = Plane(Point3D(bisector_pt1[0], bisector_pt1[1], bisector_pt1[2]), 
-                                       Point3D(bisector_pt2[0], bisector_pt2[1], bisector_pt2[2]), 
-                                       Point3D(bisector_pt3[0], bisector_pt3[1], bisector_pt3[2]))
-                
-                driver_mirror_plane = Plane(Point3D(0, 0, 0), 
-                                            Point3D(threeD_midpt[0][0], threeD_midpt[1][0], threeD_midpt[2][0]), 
-                                            Point3D(threeD_window_pt[0][0], threeD_window_pt[1][0], threeD_window_pt[2][0]))
-
-                final_line = bisector_plane.intersection(driver_mirror_plane)
-                pitch = math.degrees(driver_mirror_plane.angle_between(xz_plane))
-                print("Line 288\n")
-                print("Pitch = ", pitch, " degrees, Yaw = ", yaw, " degrees\n")
-                # ser.write(f"{pitch}".encode())
-                # sleep(2)
-                # ser.write(f"{yaw}".encode())
-                # sleep(2)
-
-                print("Completed writing serial. Terminating...")
-                # return 0
-            except Exception as error:
-                print("Michael's math is wrong", error)
-                break
-        else:
-            print("No face detected in one or both cameras.")
-        
-        cv.imshow('Left Camera', img_L)
-        cv.imshow('Right Camera', img_R)
-        if cv.waitKey(2) & 0xFF == ord('q'):
-            break
-
-#generate_calibration_params()
-# ser = serial.Serial("COM4", 115200, timeout=0.5)
-main()
+if __name__ == '__main__':
+    main()
