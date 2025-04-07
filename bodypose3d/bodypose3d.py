@@ -1,14 +1,13 @@
 import cv2 as cv
 import dlib
 import numpy as np
-import sys
 from picamera2 import Picamera2
 from utils import DLT, get_projection_matrix, write_keypoints_to_disk
 
 # Desired frame resolution: height x width
 frame_shape = [1232, 1640]  # (height=1232, width=1640)
 
-def run_dlib(camera_index0, camera_index1, P0, P1):
+def run_dlib(camera_index0, camera_index1, P0, P1, save_interval=10):
     # Initialize picamera2 objects for each camera
     picam2_0 = Picamera2(camera_num=camera_index0)
     config0 = picam2_0.create_preview_configuration(main={"size": (frame_shape[1], frame_shape[0])})
@@ -29,6 +28,8 @@ def run_dlib(camera_index0, camera_index1, P0, P1):
     kpts_cam1 = []
     kpts_3d = []
 
+    frame_count = 0
+
     while True:
         # Capture frames from each camera
         frame0 = picam2_0.capture_array()
@@ -37,8 +38,7 @@ def run_dlib(camera_index0, camera_index1, P0, P1):
         if frame0 is None or frame1 is None:
             break
 
-        # Crop to a square (720x720) if necessary.
-        # Assumes original frame width is greater than 720.
+        # Crop to a square (if needed) based on frame_shape.
         if frame0.shape[1] != frame_shape[0]:
             start_col = frame_shape[1] // 2 - frame_shape[0] // 2
             end_col = frame_shape[1] // 2 + frame_shape[0] // 2
@@ -64,7 +64,6 @@ def run_dlib(camera_index0, camera_index1, P0, P1):
         else:
             # If no face is detected, fill with dummy keypoints.
             frame0_keypoints = [[-1, -1]] * 68
-
         kpts_cam0.append(frame0_keypoints)
 
         # Process camera 1 similarly.
@@ -77,10 +76,9 @@ def run_dlib(camera_index0, camera_index1, P0, P1):
                 cv.circle(frame1, (x, y), 2, (0, 0, 255), -1)
         else:
             frame1_keypoints = [[-1, -1]] * 68
-
         kpts_cam1.append(frame1_keypoints)
 
-        # Compute the 3D positions for each landmark using DLT
+        # Compute the 3D positions for each landmark using DLT.
         frame_p3ds = []
         for uv1, uv2 in zip(frame0_keypoints, frame1_keypoints):
             if uv1[0] == -1 or uv2[0] == -1:
@@ -97,6 +95,14 @@ def run_dlib(camera_index0, camera_index1, P0, P1):
         if k & 0xFF == 27:  # ESC key to exit
             break
 
+        frame_count += 1
+
+        # Save keypoints to disk every `save_interval` frames.
+        if frame_count % save_interval == 0:
+            write_keypoints_to_disk('kpts_cam0.dat', np.array(kpts_cam0))
+            write_keypoints_to_disk('kpts_cam1.dat', np.array(kpts_cam1))
+            write_keypoints_to_disk('kpts_3d.dat', np.array(kpts_3d))
+    
     cv.destroyAllWindows()
     picam2_0.stop()
     picam2_1.stop()
@@ -113,9 +119,9 @@ if __name__ == '__main__':
     P1 = get_projection_matrix(1)
 
     # Run dlib facial landmark detection and compute corresponding 3D positions.
-    kpts_cam0, kpts_cam1, kpts_3d = run_dlib(camera_index0, camera_index1, P0, P1)
+    kpts_cam0, kpts_cam1, kpts_3d = run_dlib(camera_index0, camera_index1, P0, P1, save_interval=10)
 
-    # Save the detected keypoints to disk.
+    # Final save to ensure all data is written.
     write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
     write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
     write_keypoints_to_disk('kpts_3d.dat', kpts_3d)
