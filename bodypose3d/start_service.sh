@@ -12,7 +12,7 @@ trap "echo 'Stopping services...'; kill $PYTHON_PID $NGROK_PID; exit 0" SIGINT S
 
 echo "Starting Python WebSocket server..."
 # Start the Python WebSocket server in the background
-python3 websocket_server.py &
+python3 websocket_server_with_connection_to_arduino.py &
 PYTHON_PID=$!
 
 # Give the Python server a moment to initialize

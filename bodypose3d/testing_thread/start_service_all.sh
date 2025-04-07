@@ -8,8 +8,7 @@ if lsof -Pi :8765 -sTCP:LISTEN -t >/dev/null ; then
 fi
 
 # Trap Ctrl+C (SIGINT) and SIGTERM to gracefully kill child processes
-trap "echo 'Stopping services...'; kill $MAIN_PID $NGROK_PID; exit 0" SIGINT SIGTERM
-
+trap "echo 'Stopping services...'; kill $MAIN_PID $NGROK_PID; exit 0" SIGINT SIGTER
 echo "Starting main Python process (server + DL inference)..."
 # Start the main script that launches the server and DL inference as separate processes.
 python3 main.py &

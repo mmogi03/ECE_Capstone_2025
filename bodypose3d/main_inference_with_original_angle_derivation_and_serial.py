@@ -9,17 +9,28 @@ from sympy import Plane, Point3D
 from utils import DLT, get_projection_matrix, read_rotation_translation
 
 def main():
+    # >>> DEFINE YOUR OFFSETS HERE <<<
+    # Distance in X and Y (in whatever units you are working with) 
+    # from the camera to the mirror’s coordinate origin.
+    alpha_d2 = 20.0 # threshold for d2
+    d1 = 100.0  # Example offset in X
+    d2 = 50.0  - alpha_d2 # Example offset in Y
+
     # Define desired frame resolution (height, width)
     frame_shape = [1232, 1640]
 
     # Initialize Picamera2 objects for the stereo cameras.
     picam2_left = Picamera2(camera_num=0)
-    config_left = picam2_left.create_preview_configuration(main={"size": (frame_shape[1], frame_shape[0])})
+    config_left = picam2_left.create_preview_configuration(
+        main={"size": (frame_shape[1], frame_shape[0])}
+    )
     picam2_left.configure(config_left)
     picam2_left.start()
 
     picam2_right = Picamera2(camera_num=1)
-    config_right = picam2_right.create_preview_configuration(main={"size": (frame_shape[1], frame_shape[0])})
+    config_right = picam2_right.create_preview_configuration(
+        main={"size": (frame_shape[1], frame_shape[0])}
+    )
     picam2_right.configure(config_right)
     picam2_right.start()
 
@@ -36,12 +47,18 @@ def main():
     predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 
     # Hard–set the 3D rear window point (in homogeneous coordinates).
-    threeD_window_pt = [[ -5e+05],
-                        [ 8.65304694e+04],
-                        [-1.1e+04],
-                        [ 1.00000000e+00]]
+    threeD_window_pt = [
+        [-5e+05],
+        [8.65304694e+04],
+        [-1.1e+04],
+        [1.00000000e+00]
+    ]
     # Convert to a 3D tuple (dropping the homogeneous coordinate).
-    window_pt = (threeD_window_pt[0][0], threeD_window_pt[1][0], threeD_window_pt[2][0])
+    window_pt = (
+        threeD_window_pt[0][0],
+        threeD_window_pt[1][0],
+        threeD_window_pt[2][0]
+    )
 
     # Initialize serial communication.
     ser = serial.Serial("COM4", 115200, timeout=0.5)
@@ -85,39 +102,69 @@ def main():
             print("3D midpoint:", threeD_midpt)
 
             try:
-                # --- Older Derivation via Plane Intersections ---
-
-                # Construct the "driver plane" from the origin, a point along X at the mid-face X and mid-face Z, and the full mid-face point.
-                driver_plane = Plane(
-                    Point3D(0, 0, 0),
-                    Point3D(threeD_midpt[0], 0, threeD_midpt[2]),
-                    Point3D(threeD_midpt[0], threeD_midpt[1], threeD_midpt[2])
+                # --------------------------------------
+                # Transform the face point & window point
+                # into the mirror's coordinate system.
+                # --------------------------------------
+                # We treat the mirror as the origin, so we subtract
+                # (d1, d2, 0) from the camera-based 3D coordinates.
+                face_pt_mirror = (
+                    threeD_midpt[0] - d1,
+                    threeD_midpt[1] - d2,
+                    threeD_midpt[2]
+                )
+                window_pt_mirror = (
+                    window_pt[0] - d1,
+                    window_pt[1] - d2,
+                    window_pt[2]
                 )
 
-                # Construct the "rear window plane" from the origin, a point along X at the window's X and Z, and the full window point.
+                # --------------------------------------
+                # Plane definitions in the mirror frame
+                # --------------------------------------
+
+                # Construct the "driver plane" from:
+                # (0,0,0), (faceX,0,faceZ), (faceX,faceY,faceZ)
+                driver_plane = Plane(
+                    Point3D(0, 0, 0),
+                    Point3D(face_pt_mirror[0], 0, face_pt_mirror[2]),
+                    Point3D(face_pt_mirror[0], face_pt_mirror[1], face_pt_mirror[2])
+                )
+
+                # Construct the "rear window plane" similarly.
                 rear_window_plane = Plane(
                     Point3D(0, 0, 0),
-                    Point3D(window_pt[0], 0, window_pt[2]),
-                    Point3D(window_pt[0], window_pt[1], window_pt[2])
+                    Point3D(window_pt_mirror[0], 0, window_pt_mirror[2]),
+                    Point3D(window_pt_mirror[0], window_pt_mirror[1], window_pt_mirror[2])
                 )
 
                 # Reference plane: xy–plane.
-                xy_plane = Plane(Point3D(0, 0, 0), Point3D(1, 0, 0), Point3D(0, 1, 0))
+                xy_plane = Plane(
+                    Point3D(0, 0, 0),
+                    Point3D(1, 0, 0),
+                    Point3D(0, 1, 0)
+                )
                 # Reference plane: xz–plane.
-                xz_plane = Plane(Point3D(0, 0, 0), Point3D(1, 0, 0), Point3D(0, 0, 1))
+                xz_plane = Plane(
+                    Point3D(0, 0, 0),
+                    Point3D(1, 0, 0),
+                    Point3D(0, 0, 1)
+                )
 
                 # Compute angles:
                 alpha = driver_plane.angle_between(rear_window_plane)
                 beta = driver_plane.angle_between(xy_plane)
                 # Heuristically combine angles to compute yaw.
+                # The division by 2 is from the law of reflection/bisector logic.
                 yaw = math.degrees(alpha / 2 + beta)
                 print("Heuristically computed yaw:", yaw)
 
-                # Construct the "driver mirror plane" using the origin, the mid-face point, and the window point.
+                # Construct the "driver mirror plane" using
+                # (0,0,0), the face point, and the window point (all in mirror frame).
                 driver_mirror_plane = Plane(
                     Point3D(0, 0, 0),
-                    Point3D(threeD_midpt[0], threeD_midpt[1], threeD_midpt[2]),
-                    Point3D(window_pt[0], window_pt[1], window_pt[2])
+                    Point3D(face_pt_mirror[0], face_pt_mirror[1], face_pt_mirror[2]),
+                    Point3D(window_pt_mirror[0], window_pt_mirror[1], window_pt_mirror[2])
                 )
                 # Compute pitch as the angle between the driver mirror plane and the xz–plane.
                 pitch = math.degrees(driver_mirror_plane.angle_between(xz_plane))
@@ -148,4 +195,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
