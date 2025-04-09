@@ -1,0 +1,3 @@
+[submodule "Capstone_MirrorApp"]
+	path = Capstone_MirrorApp
+	url = https://github.com/muraliikrishnant/Capstone_MirrorApp.git
