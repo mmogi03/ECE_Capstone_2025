@@ -1,3 +1,0 @@
-[submodule "deps/aanet"]
-	path = deps/aanet
-	url = https://github.com/haofeixu/aanet.git
