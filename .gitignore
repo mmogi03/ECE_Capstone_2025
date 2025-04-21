@@ -1,2 +1,7 @@
 env1/
 venv/
+python_stereo_camera_calibrate/frames*
+src_old
+*.png
+python_stereo_camera_calibrate/frames/*
+python_stereo_camera_calibrate/frames_pair/*

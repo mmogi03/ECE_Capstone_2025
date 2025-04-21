@@ -9,6 +9,9 @@ from sympy import Plane, Point3D
 from utils import DLT, get_projection_matrix  # your existing utility functions
 from serial_interface import SerialInterface
 
+log_ind = 0
+read_arduino_count = 0
+
 def run_inference(auto_adjust_flag):
     """
     This function runs in a separate process. While auto_adjust_flag.value is True,
@@ -16,6 +19,8 @@ def run_inference(auto_adjust_flag):
     derives pitch and yaw using a difference-vector method, sends these angles to Arduino over serial,
     and then waits until it receives a response from Arduino before proceeding.
     """
+    global log_ind
+    global read_arduino_count
     serial_intf = SerialInterface()  # create a serial connection
     frame_shape = [1232, 1640]
 
@@ -74,6 +79,7 @@ def run_inference(auto_adjust_flag):
             threeD_midpt = DLT(P_left, P_right, midpt_left, midpt_right)
             if len(threeD_midpt) == 4:
                 threeD_midpt = [threeD_midpt[i] / threeD_midpt[3] for i in range(3)]
+                print(f"Rearview mirror midpoint 3D {threeD_midpt}")
             
             # Compute a difference vector (assuming Z is forward).
             diff_vec = np.array(window_pt) - np.array(threeD_midpt)
@@ -83,23 +89,40 @@ def run_inference(auto_adjust_flag):
             # Prepare and send the command to Arduino.
             command = json.dumps({"pitch": pitch_infer, "yaw": yaw_infer})
             serial_intf.send_command(command)
-            print("DL inference sent angles:", command)
+            print(f"[{log_ind}] DL inference sent angles:", command)
+            log_ind += 1
             
             # Wait for Arduino response before proceeding.
+            # print("SLEEPING FOR 45s")
+            # sleep(45)
+            print(f"[{log_ind}] Waiting for Arduino response...")
+            log_ind += 1
+
             response = None
             timeout = 12  # seconds (adjust based on Arduino delay; your code uses delay(8000) = 8 sec)
             start_time = time()
-            while response is None and (time() - start_time) < timeout:
+            while response is None:      
+                print(f"[{log_ind}] !!waiting on response")      
+                log_ind += 1
+            # while response is None and (time() - start_time) < timeout:
                 response = serial_intf.read_response()
+                if read_arduino_count == 0:
+                    response = serial_intf.read_response()
+                read_arduino_count += 1
+
                 if response is not None:
                     break
                 sleep(0.1)
             if response is not None:
-                print("Received response from Arduino:", response)
+                print(f"[{log_ind}] Received response from Arduino:", response)
+                log_ind += 1
+                sleep(5)
             else:
-                print("No response received from Arduino within timeout.")
+                print(f"[{log_ind}] No response received from Arduino within timeout.")
+                log_ind += 1
         else:
-            print("DL inference: Face not detected.")
+            print(f"[{log_ind}] DL inference: Face not detected.")
+            log_ind += 1
 
         sleep(0.1)  # adjust loop speed as desired
 

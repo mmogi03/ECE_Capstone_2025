@@ -37,7 +37,7 @@ def load_camera_intrinsics(camera_name):
         print("Error reading intrinsic file:", filename)
         quit()
     intrinsic_lines = lines[intrinsic_index+1:distortion_index]
-    intrinsic = [ [float(x) for x in line.split()] for line in intrinsic_lines ]
+    intrinsic = [[float(x) for x in line.split()] for line in intrinsic_lines]
     intrinsic = np.array(intrinsic)
     distortion_line = lines[distortion_index+1]
     distortion = [float(x) for x in distortion_line.split()]
@@ -45,20 +45,39 @@ def load_camera_intrinsics(camera_name):
     return intrinsic, distortion
 
 def save_frames_two_cams(camera0_name, camera1_name):
-    if not os.path.exists('frames_pair'):
-        os.mkdir('frames_pair')
+    frames_dir = 'frames_pair'
+    if not os.path.exists(frames_dir):
+        os.mkdir(frames_dir)
 
-    view_resize = calibration_settings['view_resize']
-    cooldown_time = calibration_settings['cooldown']
+    # ----------------------------------------------------
+    # Determine the last index already saved for camera0
+    cam0_pattern = os.path.join(frames_dir, f"{camera0_name}_*.png")
+    existing = glob.glob(cam0_pattern)
+    if existing:
+        indices = []
+        for fn in existing:
+            base = os.path.basename(fn)
+            try:
+                idx = int(os.path.splitext(base)[0].split('_')[-1])
+                indices.append(idx)
+            except ValueError:
+                continue
+        start_index = max(indices) if indices else -1
+    else:
+        start_index = -1
+    # ----------------------------------------------------
+
+    view_resize    = calibration_settings['view_resize']
+    cooldown_time  = calibration_settings['cooldown']
     number_to_save = calibration_settings['stereo_calibration_frames']
-    width = calibration_settings['frame_width']
-    height = calibration_settings['frame_height']
-
-    camera0_index = calibration_settings[camera0_name]
-    camera1_index = calibration_settings[camera1_name]
+    width          = calibration_settings['frame_width']
+    height         = calibration_settings['frame_height']
+    camera0_index  = calibration_settings[camera0_name]
+    camera1_index  = calibration_settings[camera1_name]
 
     time.sleep(3)
 
+    # initialize cameras
     picam2_cam0 = Picamera2(camera_num=camera0_index)
     config0 = picam2_cam0.create_preview_configuration(main={"size": (width, height)})
     picam2_cam0.configure(config0)
@@ -69,14 +88,15 @@ def save_frames_two_cams(camera0_name, camera1_name):
     picam2_cam1.configure(config1)
     picam2_cam1.start()
 
-    cooldown = cooldown_time
-    start = False
+    cooldown    = cooldown_time
+    start       = False
     saved_count = 0
 
     while True:
-        frame0 = picam2_cam0.capture_array()
-        frame1 = picam2_cam1.capture_array()
-        if frame0 is None or frame1 is None:
+        # --- CAPTURE & COLOR CONVERSION ---
+        raw0 = picam2_cam0.capture_array()    # RGB from Picamera2
+        raw1 = picam2_cam1.capture_array()
+        if raw0 is None or raw1 is None:
             print('Cameras not returning video data. Exiting...')
             picam2_cam0.stop()
             picam2_cam1.stop()
@@ -84,6 +104,12 @@ def save_frames_two_cams(camera0_name, camera1_name):
             time.sleep(3)
             quit()
 
+        # Convert to BGR for OpenCV
+        frame0 = cv.cvtColor(raw0, cv.COLOR_RGB2BGR)
+        frame1 = cv.cvtColor(raw1, cv.COLOR_RGB2BGR)
+        # ------------------------------------
+
+        # Resize for display
         frame0_small = cv.resize(frame0, None, fx=1./view_resize, fy=1./view_resize)
         frame1_small = cv.resize(frame1, None, fx=1./view_resize, fy=1./view_resize)
 
@@ -95,18 +121,19 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
         if start:
             cooldown -= 1
-            cv.putText(frame0_small, "Cooldown: " + str(cooldown), (50, 50),
+            cv.putText(frame0_small, f"Cooldown: {cooldown}", (50, 50),
                        cv.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 1)
-            cv.putText(frame0_small, "Num frames: " + str(saved_count), (50, 100),
+            cv.putText(frame0_small, f"Num frames: {saved_count}", (50, 100),
                        cv.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 1)
-            cv.putText(frame1_small, "Cooldown: " + str(cooldown), (50, 50),
+            cv.putText(frame1_small, f"Cooldown: {cooldown}", (50, 50),
                        cv.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 1)
-            cv.putText(frame1_small, "Num frames: " + str(saved_count), (50, 100),
+            cv.putText(frame1_small, f"Num frames: {saved_count}", (50, 100),
                        cv.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 1)
             if cooldown <= 0:
-                savename0 = os.path.join('frames_pair', camera0_name + '_' + str(saved_count) + '.png')
+                file_index = start_index + saved_count + 1
+                savename0 = os.path.join(frames_dir, f"{camera0_name}_{file_index}.png")
+                savename1 = os.path.join(frames_dir, f"{camera1_name}_{file_index}.png")
                 cv.imwrite(savename0, frame0)
-                savename1 = os.path.join('frames_pair', camera1_name + '_' + str(saved_count) + '.png')
                 cv.imwrite(savename1, frame1)
                 saved_count += 1
                 cooldown = cooldown_time

@@ -7,8 +7,10 @@ from multiprocessing import Lock
 # Create a global lock for serial access.
 global_serial_lock = Lock()
 
+read_setup = False
+
 class SerialInterface:
-    def __init__(self, port="/dev/ttyACM0", baudrate=9600, timeout=0.5, lock=global_serial_lock):
+    def __init__(self, port="/dev/ttyACM0", baudrate=19200, timeout=0.5, lock=global_serial_lock):
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
         self.lock = lock
         # Allow time for the connection to initialize.
@@ -25,6 +27,7 @@ class SerialInterface:
         """Read a response line from Arduino under mutual exclusion and attempt to parse JSON."""
         with self.lock:
             line = self.ser.readline().decode('utf-8').rstrip()
+            read_setup = True
         if line:
             try:
                 return json.loads(line)

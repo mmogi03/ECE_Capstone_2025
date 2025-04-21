@@ -28,8 +28,8 @@ def read_base_angle_from_arduino(serial_intf):
             return line
     except Exception as e:
         print("Error reading base angle:", e)
-    print("Defaulting base angle to 0, 0")
-    return {"pitch": 0, "yaw": 0}
+    # print("Defaulting base angle to 0, 0")
+    # return {"pitch": 0, "yaw": 0}
 
 # Read the base angle once at startup using the persistent connection.
 BASE_ANGLE = read_base_angle_from_arduino(persistent_serial_intf)

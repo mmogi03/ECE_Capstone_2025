@@ -2,7 +2,7 @@ import numpy as np
 import cv2 as cv
 import dlib
 import math
-import serial
+#import serial
 from time import sleep
 from picamera2 import Picamera2
 from sympy import Plane, Point3D
@@ -12,9 +12,9 @@ def main():
     # >>> DEFINE YOUR OFFSETS HERE <<<
     # Distance in X and Y (in whatever units you are working with) 
     # from the camera to the mirror’s coordinate origin.
-    alpha_d2 = 20.0 # threshold for d2
-    d1 = 100.0  # Example offset in X
-    d2 = 50.0  - alpha_d2 # Example offset in Y
+    #alpha_d2 = 12.0 # threshold for d2
+    d1 = 70.0  # Example offset in X
+    d2 = 71.0  # Example offset in Y
 
     # Define desired frame resolution (height, width)
     frame_shape = [1232, 1640]
@@ -47,12 +47,20 @@ def main():
     predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 
     # Hard–set the 3D rear window point (in homogeneous coordinates).
+    #threeD_window_pt = [
+    #    [-5e+05],
+    #    [8.65304694e+04],
+    #    [-1.1e+04],
+    #    [1.00000000e+00]
+    #]
+
     threeD_window_pt = [
-        [-5e+05],
-        [8.65304694e+04],
-        [-1.1e+04],
+        [d1],
+        [d2],
+        [141.0],
         [1.00000000e+00]
     ]
+
     # Convert to a 3D tuple (dropping the homogeneous coordinate).
     window_pt = (
         threeD_window_pt[0][0],
@@ -61,7 +69,7 @@ def main():
     )
 
     # Initialize serial communication.
-    ser = serial.Serial("COM4", 115200, timeout=0.5)
+    #ser = serial.Serial("COM4", 115200, timeout=0.5)
 
     while True:
         # Capture frames from both cameras.
@@ -92,14 +100,14 @@ def main():
             # Draw the detected landmark.
             cv.circle(frame_left, midpt_left, radius=2, color=(0, 255, 0), thickness=2)
             cv.circle(frame_right, midpt_right, radius=2, color=(0, 255, 0), thickness=2)
-            print("Left landmark:", midpt_left)
-            print("Right landmark:", midpt_right)
+            #print("Left landmark:", midpt_left)
+            #print("Right landmark:", midpt_right)
 
             # Compute the 3D point using DLT.
             threeD_midpt = DLT(P_left, P_right, midpt_left, midpt_right)
             if len(threeD_midpt) == 4:
                 threeD_midpt = [threeD_midpt[i] / threeD_midpt[3] for i in range(3)]
-            print("3D midpoint:", threeD_midpt)
+            # print("3D midpoint:", threeD_midpt)
 
             try:
                 # --------------------------------------
@@ -109,15 +117,18 @@ def main():
                 # We treat the mirror as the origin, so we subtract
                 # (d1, d2, 0) from the camera-based 3D coordinates.
                 face_pt_mirror = (
-                    threeD_midpt[0] - d1,
-                    threeD_midpt[1] - d2,
+                    threeD_midpt[0] + d1,
+                    threeD_midpt[1] + d2,
                     threeD_midpt[2]
                 )
                 window_pt_mirror = (
                     window_pt[0] - d1,
-                    window_pt[1] - d2,
+                    window_pt[1]  -d2 - 0.001,
                     window_pt[2]
                 )
+
+                print("FACE_PT_MIRROR = ", face_pt_mirror)
+                print("WINDOW_PT_MIRROR = ", window_pt_mirror)
 
                 # --------------------------------------
                 # Plane definitions in the mirror frame
@@ -171,8 +182,8 @@ def main():
                 print("Computed pitch:", pitch)
 
                 # Send the angles over serial (each followed by a newline).
-                ser.write(f"{yaw}\n".encode())
-                ser.write(f"{pitch}\n".encode())
+                #ser.write(f"{yaw}\n".encode())
+                #ser.write(f"{pitch}\n".encode())
 
             except Exception as e:
                 print("Error computing angles:", e)
@@ -191,7 +202,7 @@ def main():
     cv.destroyAllWindows()
     picam2_left.stop()
     picam2_right.stop()
-    ser.close()
+    #ser.close()
 
 if __name__ == '__main__':
     main()

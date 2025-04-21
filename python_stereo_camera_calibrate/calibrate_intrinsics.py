@@ -57,6 +57,11 @@ def save_frames_single_camera(camera_name):
             time.sleep(3)
             quit()
 
+        # capture returns an RGB image
+        frame_rgb = picam2.capture_array()
+
+        # convert to BGR for OpenCV
+        frame = cv.cvtColor(frame_rgb, cv.COLOR_RGB2BGR)
         frame_small = cv.resize(frame, None, fx=1/view_resize, fy=1/view_resize)
 
         if not start:
