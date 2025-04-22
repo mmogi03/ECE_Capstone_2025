@@ -13,8 +13,10 @@ def main():
     # Distance in X and Y (in whatever units you are working with) 
     # from the camera to the mirror’s coordinate origin.
     #alpha_d2 = 12.0 # threshold for d2
-    d1 = 70.0  # Example offset in X
-    d2 = 71.0  # Example offset in Y
+    d1 = 58.42  # Example offset in X
+    d2 = 38.1  # Example offset in Y
+    dwz = 330.2
+    dwy = 35.56
 
     # Define desired frame resolution (height, width)
     frame_shape = [1232, 1640]
@@ -56,8 +58,8 @@ def main():
 
     threeD_window_pt = [
         [d1],
-        [d2],
-        [141.0],
+        [dwy],
+        [dwz],
         [1.00000000e+00]
     ]
 
@@ -123,7 +125,7 @@ def main():
                 )
                 window_pt_mirror = (
                     window_pt[0] - d1,
-                    window_pt[1]  -d2 - 0.001,
+                    window_pt[1],
                     window_pt[2]
                 )
 
@@ -180,7 +182,7 @@ def main():
                 # beta = driver_plane.angle_between(xy_plane)
 
 
-                driver_pt_xz = np.array([d1, 0, 22])
+                driver_pt_xz = np.array([face_pt_mirror[0], 0, face_pt_mirror[2]])
                 rear_window_pt_xz = np.array([window_pt_mirror[0], 0, window_pt_mirror[2]])
                 xy_plane_pt_xz = np.array([1, 0, 0])
 
@@ -191,7 +193,7 @@ def main():
 
                 # Heuristically combine angles to compute yaw.
                 # The division by 2 is from the law of reflection/bisector logic.
-                yaw = math.degrees(alpha / 2 + beta)
+                yaw = 90 - math.degrees(alpha / 2 + beta)
                 print("YAW:", yaw)
 
                 # Construct the "driver mirror plane" using
@@ -204,7 +206,7 @@ def main():
                 # Compute pitch as the angle between the driver mirror plane and the xz–plane.
                 # pitch = math.degrees(driver_mirror_plane.angle_between(xz_plane))
 
-                driver_pt_yz = np.array([0, face_pt_mirror[1], 22])
+                driver_pt_yz = np.array([0, face_pt_mirror[1], face_pt_mirror[2]])
                 rear_window_pt_yz = np.array([0, window_pt_mirror[1], window_pt_mirror[2]])
                 xz_plane_pt_yz = np.array([0, 0, 1])
 

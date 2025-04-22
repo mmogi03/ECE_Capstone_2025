@@ -1,34 +1,41 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # run_services.sh
-# This script checks if port 8765 is in use, kills offending processes,
-# then launches the main.py process (which launches both DL inference and the WebSocket server)
-# and starts an ngrok tunnel on port 8765.
+# Launches main.py and starts localtunnel with a fixed subdomain.
 
-# Check if port 8765 is in use and kill any process using it.
-if lsof -Pi :8765 -sTCP:LISTEN -t >/dev/null; then
-    echo "Port 8765 is in use. Killing process(es)..."
-    kill -9 $(lsof -t -i:8765)
+set -e
+
+PORT=8765
+SUBDOMAIN="car-rutgers"
+
+# 1. Kill any process on the port
+if lsof -Pi :${PORT} -sTCP:LISTEN -t >/dev/null; then
+    echo "Port ${PORT} is in use. Killing process(es)..."
+    kill -9 $(lsof -t -i:${PORT})
     sleep 1
 fi
 
-# Trap SIGINT and SIGTERM to kill child processes on exit.
-trap "echo 'Stopping services...'; kill $MAIN_PID $NGROK_PID; exit 0" SIGINT SIGTERM
+# 2. Trap SIGINT/SIGTERM to clean up child processes
+trap "echo 'Stopping services...'; kill $MAIN_PID $LT_PID; exit 0" SIGINT SIGTERM
 
+# 3. Start main.py
 echo "Starting main Python process (main.py)..."
 python3 main.py &
 MAIN_PID=$!
 
-# Give the main process a moment to initialize.
+# Give main.py a moment
 sleep 2
 
-echo "Starting ngrok tunnel on port 8765..."
-ngrok http 8765 --host-header=localhost:8765 &
-NGROK_PID=$!
+# 4. Start localtunnel with just the subdomain
+echo "Starting localtunnel on port ${PORT} using subdomain ${SUBDOMAIN}..."
+lt --port ${PORT} --subdomain ${SUBDOMAIN} &
+LT_PID=$!
 
-echo "Services started:"
-echo " - Main process PID: $MAIN_PID"
-echo " - ngrok PID: $NGROK_PID"
-echo "ngrok Web Interface: http://127.0.0.1:4040"
+echo ""
+echo "🚀  Tunnel should be available at: https://${SUBDOMAIN}.loca.lt"
+echo "Main process PID: $MAIN_PID"
+echo "localtunnel PID:  $LT_PID"
+echo ""
+echo "Press Ctrl+C to stop services."
 
-# Wait indefinitely.
+# 5. Wait forever
 wait

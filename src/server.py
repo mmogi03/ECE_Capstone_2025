@@ -1,44 +1,62 @@
 import asyncio
 import json
-import websockets
+import logging
 import time
+import websockets
 from multiprocessing import Process, Value
 from ctypes import c_bool
 
 from serial_interface import SerialInterface
-from dl_inference import run_inference
+from dl_inference_real_v2 import run_inference
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Persistent Serial Connection Setup for Base Angle Reading and Commands
 # =============================================================================
-# Create a persistent SerialInterface that remains open throughout the server’s lifetime.
 persistent_serial_intf = SerialInterface()
-print("Persistent serial connection established.")
+logger.info("Persistent serial connection established.")
 
 def read_base_angle_from_arduino(serial_intf):
     """
     Attempt to read the initial base angle from the Arduino using SerialInterface.
     Expecting a JSON string such as {"pitch":0,"yaw":0}.
+    Strips any stray carriage-returns so each log prints on its own line.
+    Returns a dict.
     """
     try:
-        print("Attempting to read base angle from Arduino")
-        line = serial_intf.read_response()
-        print(f"Read line: {line}")
-        if line:
-            return line
+        logger.info("Attempting to read base angle from Arduino")
+        raw = serial_intf.read_response()
+        if raw:
+            if isinstance(raw, str):
+                clean = raw.replace('\r', '').replace('\n', '').strip()
+                logger.info(f"Read line: {clean}")
+                return json.loads(clean)
+            elif isinstance(raw, dict):
+                logger.info(f"Read dict: {raw}")
+                return raw
     except Exception as e:
-        print("Error reading base angle:", e)
-    # print("Defaulting base angle to 0, 0")
-    # return {"pitch": 0, "yaw": 0}
+        logger.error("Error reading base angle: %s", e)
+    # Fallback if nothing read
+    logger.warning("Defaulting base angle to 0,0")
+    return {"pitch": 0, "yaw": 0}
 
-# Read the base angle once at startup using the persistent connection.
+# Read base angle once at startup
 BASE_ANGLE = read_base_angle_from_arduino(persistent_serial_intf)
-print("Read base angle from Arduino:", BASE_ANGLE)
+logger.info("Base angle from Arduino: %s", BASE_ANGLE)
 
 # =============================================================================
 # Shared DL Inference Control Variables
 # =============================================================================
-auto_adjust_flag = Value(c_bool, True)
+auto_adjust_flag = Value(c_bool, False)
 dl_process = None  # Global handle for the DL inference process.
 
 # =============================================================================
@@ -46,105 +64,117 @@ dl_process = None  # Global handle for the DL inference process.
 # =============================================================================
 async def handler(websocket):
     global auto_adjust_flag, dl_process, persistent_serial_intf
-    # When a client connects, send the base angle.
+
+    # Send the base angle on new connection
     await websocket.send(json.dumps(BASE_ANGLE))
-    print("Sent base angle:", BASE_ANGLE)
-    
+    logger.info("Sent base angle: %s", BASE_ANGLE)
+
     while True:
         try:
             message = await websocket.recv()
             data = json.loads(message)
-            print("Received message from client:", data)
-            
+            logger.info("Received message from client: %r", data)
+
             # -----------------------------------------------------------------
             # Handle autoAdjust commands.
             # -----------------------------------------------------------------
             if "autoAdjust" in data:
                 if data["autoAdjust"] == "False":
+                    logger.info("AUTO ADJUST IS FALSE")
                     auto_adjust_flag.value = False
-                    # Terminate the DL inference process if active.
-                    if dl_process is not None and dl_process.is_alive():
+                    if dl_process and dl_process.is_alive():
                         dl_process.terminate()
                         dl_process.join(timeout=5)
                         if dl_process.is_alive():
                             dl_process.kill()
                         dl_process = None
-                    print("Auto adjust disabled by client.")
+                    logger.info("Auto adjust disabled by client.")
                 elif data["autoAdjust"] == "True":
+                    logger.info("AUTO ADJUST IS TRUE")
                     auto_adjust_flag.value = True
-                    # Start the DL inference process if it is not running.
-                    if dl_process is None or not dl_process.is_alive():
+                    if not dl_process or not dl_process.is_alive():
                         dl_process = Process(target=run_inference, args=(auto_adjust_flag,))
                         dl_process.start()
-                    print("Auto adjust enabled by client.")
-            
+                    logger.info("Auto adjust enabled by client.")
+
             # -----------------------------------------------------------------
             # Handle explicit angle updates (only when autoAdjust is off).
-            # The packet should contain "pitch" and "yaw".
             # -----------------------------------------------------------------
-            if isinstance(data, dict) and "pitch" in data and "yaw" in data and not auto_adjust_flag.value:
-                print("Received updated angle from client:", data)
-                
-                # Send waiting status to the client.
+            if (
+                isinstance(data, dict)
+                and "pitch" in data
+                and "yaw" in data
+                and not auto_adjust_flag.value
+            ):
+                logger.info("Received updated angle from client: %s", data)
+
+                # Notify client we're waiting for Arduino
                 waiting_packet = {"status": "waiting"}
                 await websocket.send(json.dumps(waiting_packet))
-                print("Sent waiting status:", waiting_packet)
-                
-                # Use the persistent SerialInterface to send the updated angle command.
-                command = json.dumps({"pitch": data["pitch"], "yaw": data["yaw"]})
-                persistent_serial_intf.send_command(command)
-                print("Sent to Arduino:", command)
-                
-                # Wait for Arduino response for up to 10 seconds.
-                arduino_response = None
+                logger.info("Sent waiting status: %s", waiting_packet)
+
+                # Send command to Arduino
+                cmd = json.dumps({"pitch": data["pitch"] * 17.9 * -1, "yaw": data["yaw"] * 17.9})
+                persistent_serial_intf.send_command(cmd)
+                logger.info("Sent to Arduino: %s", cmd)
+
+                # Await response, up to 10s
+                raw = None
                 start_time = time.time()
-                while (time.time() - start_time) < 10:
-                    arduino_response = await asyncio.to_thread(persistent_serial_intf.read_response)
-                    if arduino_response:
+                while time.time() - start_time < 10:
+                    raw = await asyncio.to_thread(persistent_serial_intf.read_response)
+                    if raw:
                         break
                     await asyncio.sleep(0.1)
-                
-                if not arduino_response:
-                    print("No response from Arduino within timeout.")
+
+                # Process Arduino response
+                if not raw:
+                    logger.warning("No response from Arduino within timeout.")
                     encoder_data = {"pitch": data["pitch"], "yaw": data["yaw"]}
                 else:
-                    print("Arduino response:", arduino_response)
-                    encoder_data = (
-                        arduino_response
-                        if isinstance(arduino_response, dict)
-                        else {"pitch": data["pitch"], "yaw": data["yaw"]}
-                    )
-                
-                # Send a ready packet with the encoder values.
+                    if isinstance(raw, str):
+                        clean = raw.replace('\r', '').replace('\n', '').strip()
+                        logger.info("Arduino response (str): %s", clean)
+                        try:
+                            encoder_data = json.loads(clean)
+                        except json.JSONDecodeError:
+                            logger.error("JSON decode error on Arduino response, using sent values")
+                            encoder_data = {"pitch": data["pitch"], "yaw": data["yaw"]}
+                    elif isinstance(raw, dict):
+                        logger.info("Arduino response (dict): %s", raw)
+                        encoder_data = raw
+                    else:
+                        logger.warning("Unexpected Arduino response type %s, using sent values", type(raw))
+                        encoder_data = {"pitch": data["pitch"], "yaw": data["yaw"]}
+
+                # Send ready packet
                 ready_packet = {
                     "status": "ready",
                     "pitch": encoder_data.get("pitch", data["pitch"]),
                     "yaw": encoder_data.get("yaw", data["yaw"])
                 }
                 await websocket.send(json.dumps(ready_packet))
-                print("Sent ready packet:", ready_packet)
+                logger.info("Sent ready packet: %s", ready_packet)
+
             else:
-                # For any non-angle update messages.
-                print("Received non-angle update message:", data)
-            
+                logger.debug("Non-angle-update message or autoAdjust is on.")
+
         except websockets.ConnectionClosed:
-            print("Client disconnected")
+            logger.info("Client disconnected")
             break
-        except Exception as e:
-            print("Error in handler:", e)
+        except Exception:
+            logger.exception("Error in handler:")
 
 # =============================================================================
 # Main Event Loop
 # =============================================================================
 async def main():
     global auto_adjust_flag, dl_process
-    # If auto_adjust_flag is initially True, start the DL inference process.
     if auto_adjust_flag.value:
         dl_process = Process(target=run_inference, args=(auto_adjust_flag,))
         dl_process.start()
-    
     async with websockets.serve(handler, "0.0.0.0", 8765):
-        print("WebSocket server started on port 8765")
+        logger.info("WebSocket server started on port 8765")
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
