@@ -17,10 +17,15 @@ read_arduino_count = 0
 Hard-coded measurements required in the angle computations.
 Assume this is known based on the car dimensions.
 """
-d1 = 58.42  # Example offset in X
-d2 = 38.1   # Example offset in Y
-dwz = 330.2
-dwy = 35.56
+# d1 = 58.42  # Example offset in X
+# d2 = 38.1   # Example offset in Y
+# dwz = 330.2
+# dwy = 35.56
+
+d1 = 51.5
+d2 = 32.0
+dwz = 178.0
+dwy = 17.0
 
 # Display scale factor for visualization (0.5 = half-size windows)
 DISPLAY_SCALE = 0.5

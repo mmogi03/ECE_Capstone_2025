@@ -3,6 +3,7 @@ import dlib
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from picamera2 import Picamera2
 
 def undistort_image(img, camera_matrix, dist):
     height, width = img.shape[:2]
@@ -38,11 +39,16 @@ def main():
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor("../shape_predictor_68_face_landmarks.dat")
 
-    cap_left = cv.VideoCapture(1)
-    cap_right = cv.VideoCapture(0, cv.CAP_DSHOW)
+    # Initialize Picamera2 for left and right cameras.
+    picamLeft = Picamera2(camera_num=0)
+    picamLeft.configure(picamLeft.create_preview_configuration())
+    picamLeft.start()
+
+    picamRight = Picamera2(camera_num=1)
+    picamRight.configure(picamRight.create_preview_configuration())
+    picamRight.start()
 
     # Create one matplotlib figure with three subplots.
-    # ax1: left image, ax2: right image, ax3: 3D plot.
     fig = plt.figure("Combined Display")
     ax1 = fig.add_subplot(1, 3, 1)
     ax1.set_title("Left 2D")
@@ -56,10 +62,13 @@ def main():
 
     plt.ion()
     while True:
-        retL, frameL = cap_left.read()
-        retR, frameR = cap_right.read()
-        if not retL or not retR:
-            break
+        # Capture frames from both cameras using Picamera2.
+        frameLeft = picamLeft.capture_array()
+        frameRight = picamRight.capture_array()
+
+        # Convert from RGB to BGR for OpenCV processing.
+        frameL = cv.cvtColor(frameLeft, cv.COLOR_RGB2BGR)
+        frameR = cv.cvtColor(frameRight, cv.COLOR_RGB2BGR)
 
         undistortedL = undistort_image(frameL, camera_matrix_L, dist_L)
         undistortedR = undistort_image(frameR, camera_matrix_R, dist_R)
@@ -140,7 +149,7 @@ def main():
 
             # Rotate about the X-axis by +90 degrees to have the face point in -Y
             final_points = rotate_x(rotated_points, np.pi / 2)
-            # Additional flip on Z if needed (here you can adjust as desired)
+            # Additional flip on Z if needed (adjust as desired)
             final_points[:, 2] = -final_points[:, 2]
 
             # Dynamic plot limits
@@ -158,13 +167,15 @@ def main():
             ax3.set_xlim([-500, 500])
             ax3.set_ylim([-500, 500])
             ax3.set_zlim([-500, 500])
+        
         plt.pause(0.001)
-        # Optionally, break out on key press (this part requires additional handling if needed)
-        if cv.waitKey(1) & 0xFF == ord('q'):
+        # Break out of the loop if the matplotlib window is closed.
+        if not plt.get_fignums():
             break
 
-    cap_left.release()
-    cap_right.release()
+    # Stop the Picamera2 objects.
+    picamLeft.stop()
+    picamRight.stop()
     plt.close()
 
 if __name__ == "__main__":
